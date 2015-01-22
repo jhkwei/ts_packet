@@ -24,9 +24,13 @@ static int32_t ts_buffer_resize(struct ts_buffer *b, int32_t size){
 		return 0;
 	}
 	int32_t length = b->length;
+	if(length == 0 ){
+		length = size;
+	}
 	while(length < size){
 		length = length * 2;
 	}
+
 	char *data = ts_malloc(length);
 	if(!data){
 		ts_warn("malloc failed\n");
@@ -102,5 +106,16 @@ int32_t ts_buffer_read(struct ts_buffer *b, char *data, int32_t size){
 	return size;
 }
 
+void ts_buffer_show(struct ts_buffer *b, int32_t size){
+	int32_t i;
+	int32_t bsize = ts_buffer_size(b);
+	for(i = 0; i < bsize && i < size ;i++){
+		if(i%32 == 0){
+			printf("\n");
+		}
+		printf(" %02x", b->data[i]&0xff);
+	}
+	printf("\n");
+}
 
 #endif /* TS_BUFFER_H_ */
