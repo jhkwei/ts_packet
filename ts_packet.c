@@ -62,13 +62,12 @@ void ts_pid_free(struct ts_pid *pid){
 }
 
 int32_t ts_pid_init(struct ts_pid *ts_pid, int32_t pid, int32_t type){
-	assert(ts_pid);
+	assert(ts_pid && pid >= 0 && pid < 8192);
 	ts_pid->pid = pid;
 	ts_pid->type = type;
 	ts_pid->pass = 1;
 	return 0;
 }
-
 
 struct ts_packet *ts_packet_new(){
 	struct ts_packet *ts = ts_malloc(sizeof(*ts));
@@ -132,6 +131,8 @@ void ts_packet_exit(struct ts_packet *ts){
 
 
 int32_t ts_pat_parse(struct ts_packet *ts, struct ts_pid *pid){
+	assert(ts && pid);
+
 	int32_t i;
 	char *p;
 	int32_t size = ts_buffer_size(pid->data_payload);
@@ -203,12 +204,14 @@ struct es_info_header *ts_es_info_header_new(){
 }
 
 void ts_es_info_header_free(struct es_info_header *es){
-	if(es){
-		ts_free(es);
-	}
+	assert(es);
+	ts_free(es);
+
 }
 
 int32_t ts_add_es_info(struct ts_packet *ts, int32_t service_id, int32_t stream_type, int32_t pid){
+
+	assert(ts && pid >=0 && pid < 8192);
 
 	struct es_info_header *es = ts_es_info_header_new();
 	if(!es){
@@ -236,6 +239,8 @@ int32_t ts_add_es_info(struct ts_packet *ts, int32_t service_id, int32_t stream_
 }
 
 int32_t ts_pmt_done(struct ts_packet *ts, int32_t service_id){
+	assert(ts);
+
 	int32_t i;
 	int32_t done_num = 0;
 	for(i = 0; i < ts->program_num; i++){
@@ -256,6 +261,7 @@ int32_t ts_pmt_done(struct ts_packet *ts, int32_t service_id){
 }
 
 int32_t ts_pmt_parse(struct ts_packet *ts, struct ts_pid *pid){
+	assert(ts && pid);
 	int32_t service_id;
 	char *p;
 	int32_t size = ts_buffer_size(pid->data_payload);
@@ -310,6 +316,8 @@ int32_t ts_pmt_parse(struct ts_packet *ts, struct ts_pid *pid){
 }
 
 int32_t ts_add_elementary_PID(struct ts_packet *ts){
+	assert(ts);
+
 	int32_t i;
 	int32_t pid;
 	struct es_info_header *es;
@@ -338,31 +346,23 @@ int32_t ts_add_elementary_PID(struct ts_packet *ts){
 }
 
 int32_t ts_psi_is_done(struct ts_packet *ts){
+	assert(ts);
 	return ts->pmts_done;
 }
 
-
-
-
 int32_t ts_psi_is_timeout(struct ts_packet *ts){
+	assert(ts);
 	struct timeval now;
 	gettimeofday(&now, NULL);
 	return (now.tv_sec > ts->psi_start_tv.tv_sec + ts->psi_parse_timeout);
 }
 
-
-
-int32_t ts_es_output(struct ts_packet *ts, struct ts_pid *pid, char *buf, int32_t size){
-
-	ts_info("size:%d\n", size);
-	return size;
-}
-
 int32_t ts_pes_parse( struct ts_packet *ts, struct ts_pid *pid){
+	assert(ts && pid);
+
 	int32_t PES_packet_length ;
 	int32_t PES_header_data_length;
 	int32_t PTS_DTS_flags;
-	int32_t stream_id;
 	char *p = pid->data_payload->data;
 	int32_t size = ts_buffer_size(pid->data_payload);
 	if(size < 5){
@@ -379,7 +379,6 @@ int32_t ts_pes_parse( struct ts_packet *ts, struct ts_pid *pid){
 		ts_warn("is not pes start\n");
 		return 0;
 	}
-	stream_id = p[3];
 
 	PES_packet_length = ((p[4] << 8) | p[5]);
 	PTS_DTS_flags = (p[7] >> 6) & 0x03;
@@ -410,16 +409,25 @@ int32_t ts_pes_parse( struct ts_packet *ts, struct ts_pid *pid){
 		pid->dts |= ((p[2] >> 1)&0x7F) << 15;
 		pid->dts |= (p[3]&0xff) << 7;
 		pid->dts |= ((p[4] >> 1)&0x7F) ;
+	}else{
+		ts_warn("pid:%d pes length error\n", pid->pid);
 	}
 
-	ts_info("PES_header_data_length:%d data size:%d pes length:%d\n", PES_header_data_length, size, PES_packet_length);
+	//ts_info("PES_header_data_length:%d data size:%d pes length:%d\n", PES_header_data_length, size, PES_packet_length);
 	p = pid->data_payload->data + 9 + PES_header_data_length;
-	ts_es_output(ts, pid, p, size - ( 9 + PES_header_data_length));
-	return 0;
+
+	int32_t output_size = 0;
 	if(PES_packet_length > 0){
-		ts_es_output(ts, pid, p, PES_packet_length);
+		if(6 + PES_packet_length > size){
+			ts_info("PES_header_data_length:%d data size:%d pes length:%d type:%d\n", PES_header_data_length, size, PES_packet_length, pid->type);
+			return 0;
+		}
+		output_size = PES_packet_length;
 	}else{
-		ts_es_output(ts, pid, p, size - (p - pid->data_payload->data));
+		output_size = size - ( 9 + PES_header_data_length);
+	}
+	if(output_size > 0 && ts->output_callback){
+		ts->output_callback(pid, p, output_size);
 	}
 	return 0;
 }
@@ -449,11 +457,14 @@ int32_t ts_field(struct ts_pid *pid, char *buf, int32_t size){
 
 int32_t ts_payload(struct ts_packet *ts, struct ts_pid *pid, char *buf, int32_t offset){
 
+	assert(ts && pid && buf);
+
 	int32_t left_size = 0;
 	int32_t payload_unit_start_indicator = (buf[1]>>6)& 0x1;
 	left_size = 188 - offset;
 
 	if(payload_unit_start_indicator){
+
 		/*this psi/pes start  is the prev one end*/
 		if(ts_buffer_size(pid->data_payload) > 3){
 			pid->data_done = 1;
@@ -489,9 +500,11 @@ int32_t ts_payload(struct ts_packet *ts, struct ts_pid *pid, char *buf, int32_t 
 }
 
 int32_t ts_data(struct ts_packet *ts, struct ts_pid *pid, char *buf){
+
+	assert(ts && pid && buf);
+
 	int32_t left_size = 0;
 	int32_t adaptation_field_control = (buf[3] >> 4) & 0x3;
-
 
 	if(adaptation_field_control == 1){
 		ts_payload(ts, pid, buf,  4);
@@ -501,6 +514,8 @@ int32_t ts_data(struct ts_packet *ts, struct ts_pid *pid, char *buf){
 		left_size = ts_field(pid, buf, 188);
 		if(left_size > 0){
 			ts_payload(ts, pid, buf,  188 - left_size);
+		}else{
+			ts_payload(ts, pid, buf,  4);
 		}
 	}
 	return 1;
@@ -508,28 +523,33 @@ int32_t ts_data(struct ts_packet *ts, struct ts_pid *pid, char *buf){
 
 
 int32_t ts_psi(struct ts_packet *ts, struct ts_pid *pid, char *buf){
+		assert(ts && pid && buf);
 		int32_t left_size = 0;
 		left_size = ts_field(pid, buf, 188);
 		if(left_size > 0){
 			ts_payload(ts, pid, buf,  188 - left_size);
+		}else{
+			ts_payload(ts, pid, buf,  4);
 		}
+
 		return 1;
 }
 
 struct ts_pid *ts_get_pid(struct ts_packet *ts, int32_t pid){
-		if(pid >= 0 && pid < 8192){
-			return ts->pids[pid];
-		}
-		return NULL;
+		assert(pid >= 0 && pid < 8192);
+		return ts->pids[pid];
 }
 
 int32_t ts_av_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len){
+
+	assert(ts && buf && ts_len >= 188);
+
 	int32_t i;
 	int32_t pid;
 	struct ts_pid *ts_pid;
 	char *p;
 
-	for(i = 0; i < size; i = i + ts_len){
+	for(i = 0; i + 188 <= size; i = i + ts_len){
 		p = buf + i;
 		if(p[0] != 0x47){
 			ts_warn("ts no sync\n");
@@ -556,12 +576,15 @@ int32_t ts_av_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_l
  * no  parser sdt and other psi/si table
  * */
 int32_t ts_psi_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len){
+
+	assert(ts && buf && ts_len >= 188);
+
 	int32_t i;
 	int32_t pid = 0;
 	struct ts_pid *ts_pid;
 	char *p;
 
-	for(i = 0; i < size; i = i + ts_len){
+	for(i = 0; i + 188 <= size; i = i + ts_len){
 		p = buf + i;
 		if(p[0] != 0x47){
 			ts_warn("ts no sync\n");
@@ -597,11 +620,15 @@ int32_t ts_psi_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_
 }
 
 void ts_output_enable(struct ts_packet *ts, int32_t enable){
+	assert(ts);
 	ts->output_enable = enable;
 }
 
 void ts_output_config(struct  ts_packet *ts){
-
+	assert(ts);
+	if(ts->config_callback){
+		ts->config_callback(ts);
+	}
 }
 
 int32_t ts_set_pid_filter_table(struct ts_packet *ts, int32_t pids[], int32_t size){
@@ -638,6 +665,8 @@ int32_t *ts_get_service_id_filter_table(struct ts_packet *ts){
 }
 
 void ts_set_filter_program(struct ts_packet *ts,int32_t service_id){
+	assert(ts);
+
 	int32_t j;
 	int32_t find = 0;
 	struct ts_pid *ts_pid;
@@ -666,6 +695,7 @@ void ts_set_filter_program(struct ts_packet *ts,int32_t service_id){
 
 void ts_output_filter(struct ts_packet *ts){
 
+	assert(ts);
 	int32_t i;
 	int32_t pid;
 	int32_t *pids = ts_get_pid_filter_table(ts);
@@ -686,20 +716,25 @@ void ts_output_filter(struct ts_packet *ts){
 	}
 }
 
-
-
+/*
+ * @ts  struct ts_packet
+ * @buf input ts buffer
+ * @size input ts size
+ * @ts_len ts packet length as 188, 204
+ * */
 int32_t ts_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len){
 
+	assert(ts && buf && ts_len >= 188);
 	if(!ts->pmts_done){
 		ts_psi_packet(ts, buf, size, ts_len);
 		if(ts_psi_is_done(ts)|| ts_psi_is_timeout(ts)){
 			ts_add_elementary_PID(ts);
-		}
-		if(ts->pmts_done){
+
 			/*config and filter av output here*/
 			ts_output_enable(ts, 1);
 			ts_output_config(ts);
 			ts_output_filter(ts);
+			ts->pmts_done = 1;
 		}
 	}
 
@@ -710,6 +745,55 @@ int32_t ts_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len)
 	return 0;
 }
 
+
+void ts_register_output_callback(struct ts_packet *ts, output_handler_t callback){
+	assert(ts);
+	ts->output_callback = callback;
+}
+
+void ts_unregister_output_callback(struct ts_packet *ts){
+	assert(ts);
+	ts->output_callback = NULL;
+}
+
+int32_t ts_default_config(struct ts_packet *ts){
+	int32_t j;
+	struct ts_pid *ts_pid;
+	struct es_info_header *es_info, *tmp;
+	for(j = 0; j < ts->program_num; j++){
+
+		if(!ts->programs[j].pass){
+			continue;
+		}
+		/*
+		 * struct priv_data *priv_data = NULL;
+		 * do something
+		 * */
+		es_info = ts->programs[j].next;
+		while(es_info){
+			tmp = es_info;
+			es_info = tmp->next;
+			ts_pid = ts_get_pid(ts, tmp->pid);
+			if(ts_pid && ts_pid->pass){
+				/*
+				 * ts_pid->priv_data = priv_data;
+				 * */
+			}
+		}
+	}
+	return 0;
+}
+
+void ts_register_config_callback(struct ts_packet *ts, config_handler_t callback){
+	assert(ts);
+	ts->config_callback = callback;
+
+}
+
+void ts_unregister_config_callback(struct ts_packet *ts){
+	assert(ts);
+	ts->config_callback = NULL;
+}
 
 int32_t main(int32_t argc, char **argv){
 
@@ -732,7 +816,7 @@ int32_t main(int32_t argc, char **argv){
 		fclose(fp);
 		return 0;
 	}
-	while((n = fread(buf, 1, sizeof(buf), fp)) > 0){
+	while((n = fread(buf, 1, sizeof(buf), fp)) == sizeof(buf)){
 		ts_packet(ts, buf,  n,  188);
 	}
 	ts_packet_exit(ts);

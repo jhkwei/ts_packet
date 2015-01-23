@@ -51,6 +51,8 @@ struct ts_pid{
 	int32_t data_crrent_length;
 	int32_t data_filter;
 
+	int32_t packet_num;
+
 	struct ts_buffer *adaptation_field;
 	struct ts_buffer *data_payload;
 
@@ -88,22 +90,36 @@ struct ts_packet{
 	int32_t *filter_service_ids;
 
 
+	int32_t (*config_callback)(struct ts_packet *ts);
+	int32_t (*output_callback)(struct ts_pid *pid, char *buf, int32_t size);
 	void *priv_data;
 
 };
+
+typedef int32_t (*config_handler_t)(struct ts_packet *ts);
+typedef int32_t (*output_handler_t)(struct ts_pid *pid, char *buf, int32_t size);
+
 
 struct ts_packet *ts_packet_init();
 
 void ts_packet_exit(struct ts_packet *ts);
 
+/*
+ * @ts  struct ts_packet
+ * @buf input ts buffer
+ * @size input ts size
+ * @ts_len ts packet length as 188, 204
+ * */
 int32_t ts_packet(struct ts_packet *ts, char *buf,  int32_t size,  int32_t ts_len);
-
-int32_t ts_es_output( struct ts_packet *ts,struct ts_pid *pid, char *buf, int32_t size);
 
 int32_t ts_set_pid_filter_table(struct ts_packet *ts, int32_t pids[], int32_t size);
 
 int32_t ts_set_service_id_filter_table(struct ts_packet *ts, int32_t service_ids[], int32_t size);
 
-void ts_output_config(struct  ts_packet *ts);
+void ts_register_output_callback(struct ts_packet *ts, output_handler_t callback);
+
+void ts_unregister_output_callback(struct ts_packet *ts);
+
+void ts_register_config_callback(struct ts_packet *ts, config_handler_t callback);
 
 #endif /* TS_PACKET_H_ */

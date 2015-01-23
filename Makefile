@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS= -Wall 
+CFLAGS= -Wall  -g
 
 TARGET=ts_packet
 OBJS=ts_packet.o
