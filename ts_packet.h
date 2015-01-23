@@ -112,6 +112,8 @@ void ts_packet_exit(struct ts_packet *ts);
  * */
 int32_t ts_packet(struct ts_packet *ts, char *buf,  int32_t size,  int32_t ts_len);
 
+struct ts_pid *ts_get_pid(struct ts_packet *ts, int32_t pid);
+
 int32_t ts_set_pid_filter_table(struct ts_packet *ts, int32_t pids[], int32_t size);
 
 int32_t ts_set_service_id_filter_table(struct ts_packet *ts, int32_t service_ids[], int32_t size);
@@ -121,5 +123,8 @@ void ts_register_output_callback(struct ts_packet *ts, output_handler_t callback
 void ts_unregister_output_callback(struct ts_packet *ts);
 
 void ts_register_config_callback(struct ts_packet *ts, config_handler_t callback);
+
+void ts_unregister_config_callback(struct ts_packet *ts);
+
 
 #endif /* TS_PACKET_H_ */

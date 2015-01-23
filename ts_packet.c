@@ -17,6 +17,18 @@
 #include "ts_buffer.h"
 #include "ts_packet.h"
 
+void ts_pid_free(struct ts_pid *pid){
+
+	assert(pid);
+
+	if(pid->adaptation_field){
+		ts_buffer_free(pid->adaptation_field);
+	}
+	if(pid->data_payload){
+		ts_buffer_free(pid->data_payload);
+	}
+	ts_free(pid);
+}
 
 struct ts_pid *ts_pid_new(){
 	struct ts_pid *pid = ts_malloc(sizeof(*pid));
@@ -38,27 +50,8 @@ struct ts_pid *ts_pid_new(){
 	return pid;
 
 error:
-	if(pid->adaptation_field){
-		ts_buffer_free(pid->adaptation_field);
-	}
-	if(pid->data_payload){
-		ts_buffer_free(pid->data_payload);
-	}
+	ts_pid_free(pid);
 	return NULL;
-}
-
-void ts_pid_free(struct ts_pid *pid){
-
-	assert(pid);
-	if(!pid){
-		return ;
-	}
-	if(pid->adaptation_field){
-		ts_buffer_free(pid->adaptation_field);
-	}
-	if(pid->data_payload){
-		ts_buffer_free(pid->data_payload);
-	}
 }
 
 int32_t ts_pid_init(struct ts_pid *ts_pid, int32_t pid, int32_t type){
@@ -333,10 +326,10 @@ int32_t ts_add_elementary_PID(struct ts_packet *ts){
 				return 0;
 			}
 			if(es->stream_type == 0x02 || es->stream_type == 0x1b){
-				ts_pid_init(ts->pids[pid], pid, TS_AUDIO_PID);
+				ts_pid_init(ts->pids[pid], pid, TS_VIDEO_PID );
 
 			}else if(es->stream_type == 0x04 || es->stream_type == 0x0f){
-				ts_pid_init(ts->pids[pid], pid, TS_VIDEO_PID);
+				ts_pid_init(ts->pids[pid], pid, TS_AUDIO_PID);
 			}
 			ts->pids[pid]->service_id = ts->programs[i].service_id;
 			es = es->next;
@@ -420,9 +413,11 @@ int32_t ts_pes_parse( struct ts_packet *ts, struct ts_pid *pid){
 	if(PES_packet_length > 0){
 		if(6 + PES_packet_length > size){
 			ts_info("PES_header_data_length:%d data size:%d pes length:%d type:%d\n", PES_header_data_length, size, PES_packet_length, pid->type);
-			return 0;
+			//return 0;
+			output_size = size - ( 9 + PES_header_data_length);
+		}else{
+			output_size = PES_packet_length;
 		}
-		output_size = PES_packet_length;
 	}else{
 		output_size = size - ( 9 + PES_header_data_length);
 	}
@@ -433,7 +428,7 @@ int32_t ts_pes_parse( struct ts_packet *ts, struct ts_pid *pid){
 }
 
 /*just jump adaptation or point field*/
-int32_t ts_field(struct ts_pid *pid, char *buf, int32_t size){
+int32_t ts_point_field(struct ts_pid *pid, char *buf, int32_t size){
 	assert(pid && buf && size > 0);
 	int32_t left_size = 0;
 	int32_t payload_unit_start_indicator = (buf[1]>>6)&0x1;
@@ -451,6 +446,25 @@ int32_t ts_field(struct ts_pid *pid, char *buf, int32_t size){
 			left_size = size - 5 - pid->field_length;
 			pid->field_done = 1;
 		}
+	}
+	return left_size;
+}
+
+int32_t ts_adaptation_field(struct ts_pid *pid, char *buf, int32_t size){
+	assert(pid && buf && size > 0);
+	int32_t left_size = 0;
+
+	pid->field_done = 0;
+	pid->field_length = buf[4]&0xff;
+	//ts_buffer_init(pid->field);
+
+	if(size - 5 <= pid->field_length){
+		ts_warn("field length:%d error\n", pid->field_length);
+		pid->field_done = 0;
+	}else{
+		//ts_buffer_write(pid->field, buf + 5, size - 5);
+		left_size = size - 5 - pid->field_length;
+		pid->field_done = 1;
 	}
 	return left_size;
 }
@@ -509,13 +523,11 @@ int32_t ts_data(struct ts_packet *ts, struct ts_pid *pid, char *buf){
 	if(adaptation_field_control == 1){
 		ts_payload(ts, pid, buf,  4);
 	}else if(adaptation_field_control == 2){
-		ts_field(pid, buf, 188);
+		ts_adaptation_field(pid, buf, 188);
 	}else if(adaptation_field_control == 3){
-		left_size = ts_field(pid, buf, 188);
+		left_size = ts_adaptation_field(pid, buf, 188);
 		if(left_size > 0){
 			ts_payload(ts, pid, buf,  188 - left_size);
-		}else{
-			ts_payload(ts, pid, buf,  4);
 		}
 	}
 	return 1;
@@ -525,7 +537,7 @@ int32_t ts_data(struct ts_packet *ts, struct ts_pid *pid, char *buf){
 int32_t ts_psi(struct ts_packet *ts, struct ts_pid *pid, char *buf){
 		assert(ts && pid && buf);
 		int32_t left_size = 0;
-		left_size = ts_field(pid, buf, 188);
+		left_size = ts_point_field(pid, buf, 188);
 		if(left_size > 0){
 			ts_payload(ts, pid, buf,  188 - left_size);
 		}else{
@@ -573,7 +585,7 @@ int32_t ts_av_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_l
 
 /*
  * demux ts with pat and pmt,
- * no  parser sdt and other psi/si table
+ * no  parse sdt and other psi/si table
  * */
 int32_t ts_psi_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len){
 
@@ -732,8 +744,9 @@ int32_t ts_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len)
 
 			/*config and filter av output here*/
 			ts_output_enable(ts, 1);
-			ts_output_config(ts);
 			ts_output_filter(ts);
+			ts_output_config(ts);
+
 			ts->pmts_done = 1;
 		}
 	}
@@ -741,7 +754,6 @@ int32_t ts_packet(struct ts_packet *ts, char *buf, int32_t size, int32_t ts_len)
 	if(ts->output_enable){
 		ts_av_packet(ts, buf, size, ts_len);
 	}
-
 	return 0;
 }
 
@@ -795,32 +807,4 @@ void ts_unregister_config_callback(struct ts_packet *ts){
 	ts->config_callback = NULL;
 }
 
-int32_t main(int32_t argc, char **argv){
 
-	FILE *fp ;
-	if(argc < 2){
-		printf("%s xxx.ts\n", argv[0]);
-		return 0;
-	}
-
-	fp = fopen(argv[1], "r");
-	if(!fp){
-		printf("open file:%s failed\n", argv[1]);
-		return 0;
-	}
-	char buf[1316];
-	int32_t n;
-
-	struct ts_packet *ts = ts_packet_init();
-	if(!ts){
-		fclose(fp);
-		return 0;
-	}
-	while((n = fread(buf, 1, sizeof(buf), fp)) == sizeof(buf)){
-		ts_packet(ts, buf,  n,  188);
-	}
-	ts_packet_exit(ts);
-	fclose(fp);
-
-	return 0;
-}
