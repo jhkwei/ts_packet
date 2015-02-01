@@ -286,7 +286,7 @@ int32_t ts_pmt_parse(struct ts_packet *ts, struct ts_pid *pid){
 		return 0;
 	}
 	service_id = (p[3] << 8)|p[4];
-	char *end = p + section_length - 3 - 4;
+	char *end = p + section_length - 4;
 	p = p + 12 + program_info_length;
 	int32_t ES_info_length;
 	int32_t stream_type;
